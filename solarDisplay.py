@@ -12,6 +12,13 @@ MAX_HISTORY = 64
 GRAPH_Y = 82        # top of graph area (3 text lines * 26px + 4px gap)
 GRAPH_H = 158       # height of graph area (240 - GRAPH_Y - 2)
 GRAPH_W = 320       # full display width
+VALUE_RIGHT_EDGE = GRAPH_W - 10  # right margin the value text aligns to
+
+def draw_value_line(display, y, label, value, font, color):
+    display.draw_text(10, y, label, font, color)
+    value_text = f"{thousands(int(value))}W"
+    x = VALUE_RIGHT_EDGE - font.measure_text(value_text)
+    display.draw_text(x, y, value_text, font, color)
 
 def draw_graph(display, gen_history, use_history):
     green_color = color565(0, 200, 0)
@@ -97,9 +104,6 @@ def main():
             print(f"generating {generating}W")
             print(f"using {using}W")
             net = generating - using
-            genString =   f"Generating: {int(generating)}W"
-            usingString = f"Using:      {int(using)}W"
-            netString =   f"Net:        {int(net)}W"
 
             gen_history.append(generating)
             use_history.append(using)
@@ -109,20 +113,21 @@ def main():
 
             # Clear only the text area, leave graph intact until redrawn below
             display.fill_rectangle(0, 0, GRAPH_W, GRAPH_Y, black_color)
-            display.draw_text(10, 2,  genString,   espresso_dolce, white_color)
-            display.draw_text(10, 28, usingString, espresso_dolce, white_color)
-            display.draw_text(10, 54, netString,   espresso_dolce, white_color)
+            draw_value_line(display, 2,  "Generating:", generating, espresso_dolce, white_color)
+            draw_value_line(display, 28, "Using:",      using,      espresso_dolce, white_color)
+            draw_value_line(display, 54, "Net:",        net,        espresso_dolce, white_color)
             draw_graph(display, gen_history, use_history)
         time.sleep(10)
 
 
 def thousands(n):
-    s = str(n)
+    sign = "-" if n < 0 else ""
+    s = str(abs(n))
     out = ""
     while s:
-        out = ("," + s[-3:] + out) if out else s[-3:]
+        out = (s[-3:] + "," + out) if out else s[-3:]
         s = s[:-3]
-    return out
+    return sign + out
 
 # -------- Connect to WiFi --------
 def connect_wifi():
