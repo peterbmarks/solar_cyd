@@ -20,6 +20,13 @@ def draw_value_line(display, y, label, value, font, color):
     x = VALUE_RIGHT_EDGE - font.measure_text(value_text)
     display.draw_text(x, y, value_text, font, color)
 
+def draw_thick_line(display, x1, y1, x2, y2, color, thickness=2):
+    # ili9341.Display.draw_line() has no thickness option, so fake it by
+    # stacking offset copies of the line (fine for the near-horizontal
+    # segments drawn here).
+    for offset in range(thickness):
+        display.draw_line(x1, y1 + offset, x2, y2 + offset, color)
+
 def draw_graph(display, gen_history, use_history):
     green_color = color565(0, 200, 0)
     red_color   = color565(220, 50, 50)
@@ -58,8 +65,8 @@ def draw_graph(display, gen_history, use_history):
     for i in range(1, n):
         x1 = int((i - 1) * x_step)
         x2 = int(i * x_step)
-        display.draw_line(x1, val_to_y(gen_history[i - 1]), x2, val_to_y(gen_history[i]), green_color)
-        display.draw_line(x1, val_to_y(use_history[i - 1]), x2, val_to_y(use_history[i]), red_color)
+        draw_thick_line(display, x1, val_to_y(gen_history[i - 1]), x2, val_to_y(gen_history[i]), green_color)
+        draw_thick_line(display, x1, val_to_y(use_history[i - 1]), x2, val_to_y(use_history[i]), red_color)
 
 def main():
     # Function to set up SPI for TFT display
