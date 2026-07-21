@@ -1,0 +1,3 @@
+import solarDisplay
+
+solarDisplay.main()
