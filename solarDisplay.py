@@ -3,6 +3,7 @@ import sys
 import time
 
 import envoy_auth
+from framebuf import FrameBuffer, RGB565  # type: ignore
 from ili9341 import Display, color565
 from machine import Pin, SPI  # type: ignore
 from xglcd_font import XglcdFont
@@ -20,12 +21,11 @@ def draw_value_line(display, y, label, value, font, color):
     x = VALUE_RIGHT_EDGE - font.measure_text(value_text)
     display.draw_text(x, y, value_text, font, color)
 
-def draw_thick_line(display, x1, y1, x2, y2, color, thickness=2):
-    # ili9341.Display.draw_line() has no thickness option, so fake it by
-    # stacking offset copies of the line (fine for the near-horizontal
-    # segments drawn here).
-    for offset in range(thickness):
-        display.draw_line(x1, y1 + offset, x2, y2 + offset, color)
+def _swap_bytes(color):
+    # framebuf's RGB565 stores pixels byte-swapped relative to the big-endian
+    # order Display.block() expects on the wire (same swap ili9341.draw_text8x8
+    # applies), so pre-swap every color once before filling the column buffer.
+    return ((color & 0xFF) << 8) | ((color & 0xFF00) >> 8)
 
 def draw_graph(display, gen_history, use_history):
     green_color = color565(0, 200, 0)
@@ -34,10 +34,9 @@ def draw_graph(display, gen_history, use_history):
     white_color = color565(255, 255, 255)
     dim_color   = color565(45, 45, 45)
 
-    display.fill_rectangle(0, GRAPH_Y, GRAPH_W, GRAPH_H, bg_color)
-
     n = len(gen_history)
     if n < 2:
+        display.fill_rectangle(0, GRAPH_Y, GRAPH_W, GRAPH_H, bg_color)
         return
 
     all_vals = gen_history + use_history
@@ -45,28 +44,51 @@ def draw_graph(display, gen_history, use_history):
     if max_val <= 0:
         max_val = 1
 
-    y_bottom = GRAPH_Y + GRAPH_H - 1
-    y_mid    = GRAPH_Y + GRAPH_H // 2
-    y_top    = GRAPH_Y
-
-    # Grid lines at 50% and 100%
-    display.draw_hline(0, y_mid, GRAPH_W, dim_color)
-
-    # Scale labels (8x8 built-in font): max at top, mid, 0 at bottom
-    display.draw_text8x8(2, y_top + 1,   f"{thousands(int(max_val))}W", white_color, bg_color)
-    display.draw_text8x8(2, y_mid - 4,   f"{thousands(int(max_val // 2))}W", white_color, bg_color)
-    display.draw_text8x8(2, y_bottom - 8, "0W", white_color, bg_color)
-
+    thickness = 2
+    y_mid_local = GRAPH_H // 2
     x_step = GRAPH_W / n
 
     def val_to_y(val):
-        return y_bottom - int(max(val, 0) / max_val * (GRAPH_H - 1))
+        return (GRAPH_H - 1) - int(max(val, 0) / max_val * (GRAPH_H - 1))
 
-    for i in range(1, n):
-        x1 = int((i - 1) * x_step)
-        x2 = int(i * x_step)
-        draw_thick_line(display, x1, val_to_y(gen_history[i - 1]), x2, val_to_y(gen_history[i]), green_color)
-        draw_thick_line(display, x1, val_to_y(use_history[i - 1]), x2, val_to_y(use_history[i]), red_color)
+    def col_y(history, x):
+        pos = x / x_step
+        i = int(pos)
+        if i >= n - 1:
+            i, t = n - 2, 1.0
+        else:
+            t = pos - i
+        val = history[i] + t * (history[i + 1] - history[i])
+        return min(val_to_y(val), GRAPH_H - thickness)
+
+    bg_sw    = _swap_bytes(bg_color)
+    dim_sw   = _swap_bytes(dim_color)
+    green_sw = _swap_bytes(green_color)
+    red_sw   = _swap_bytes(red_color)
+
+    # Render one pixel-wide column at a time into a tiny in-RAM buffer, then
+    # push it in a single SPI transaction. Redrawing pixel-by-pixel through
+    # Display.draw_line()/draw_pixel() was ~1300 tiny SPI transactions per
+    # frame (each block() call is 6 separate writes); this cuts it to one
+    # per column (~320 total) without needing a full-screen frame buffer.
+    col_buf = bytearray(GRAPH_H * 2)
+    col_fb = FrameBuffer(col_buf, 1, GRAPH_H, RGB565)
+
+    for x in range(GRAPH_W):
+        col_fb.fill(bg_sw)
+        col_fb.pixel(0, y_mid_local, dim_sw)
+        col_fb.vline(0, col_y(gen_history, x), thickness, green_sw)
+        col_fb.vline(0, col_y(use_history, x), thickness, red_sw)
+        display.block(x, GRAPH_Y, x, GRAPH_Y + GRAPH_H - 1, col_buf)
+
+    # Scale labels (8x8 built-in font) drawn last so they stay legible on
+    # top of the graph: max at top, mid, 0 at bottom.
+    y_top    = GRAPH_Y
+    y_bottom = GRAPH_Y + GRAPH_H - 1
+    y_mid    = GRAPH_Y + y_mid_local
+    display.draw_text8x8(2, y_top + 1,   f"{thousands(int(max_val))}W", white_color, bg_color)
+    display.draw_text8x8(2, y_mid - 4,   f"{thousands(int(max_val // 2))}W", white_color, bg_color)
+    display.draw_text8x8(2, y_bottom - 8, "0W", white_color, bg_color)
 
 def main():
     # Function to set up SPI for TFT display
